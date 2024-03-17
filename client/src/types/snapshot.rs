@@ -8,7 +8,9 @@
 
 use crypto::keys::x25519;
 use engine::{
-    snapshot::{self, read, read_from as read_from_file, write, write_to as write_to_file, Key},
+    snapshot::{
+        self, read, read_from as read_from_file, read_from_any, write, write_to as write_to_file, write_to_any, Key,
+    },
     store::Cache,
     vault::{view::Record, BlobId, BoxProvider, ClientId, DbView, Key as PKey, RecordHint, RecordId, VaultId},
 };
@@ -17,6 +19,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     fmt::Display,
+    io::{Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
 };
@@ -203,7 +206,6 @@ impl Snapshot {
         write_key: Option<(VaultId, RecordId)>,
     ) -> Result<Self, SnapshotError> {
         let data = read_from_file(snapshot_path.as_path(), &key, &[])?;
-
         let state = bincode::deserialize(&data)?;
         Snapshot::from_state(state, key, write_key)
     }
@@ -397,6 +399,41 @@ impl Snapshot {
         self.states.clear();
 
         Ok(())
+    }
+
+    /// Reads state from the specified snapshot (file or memory).
+    /// TODO: Add associated data.
+    pub fn read_from(
+        source: &mut impl Read,
+        key: Key,
+        write_key: Option<(VaultId, RecordId)>,
+    ) -> Result<Self, SnapshotError> {
+        let data = read_from_any(source, &key, &[])?;
+        let state = bincode::deserialize(&data)?;
+        Snapshot::from_state(state, key, write_key)
+    }
+    /// Writes state to the specified named snapshot or the specified path
+    /// TODO: Add associated data.
+    pub fn write_to(&self, target: &mut impl Write, use_key: UseKey) -> Result<(), SnapshotError> {
+        let state = self.get_snapshot_state()?;
+        let data = bincode::serialize(&state)?;
+
+        let key = match use_key {
+            UseKey::Key(k) => k,
+            UseKey::Stored(loc) => {
+                let (vid, rid) = loc.resolve();
+                let pkey = self.keystore.get_key(vid).ok_or(SnapshotError::SnapshotKey(vid, rid))?;
+                let mut data = Vec::new();
+                self.db.get_guard::<Infallible, _>(&pkey, vid, rid, |guarded_data| {
+                    let guarded_data = guarded_data.borrow();
+                    data.extend_from_slice(&guarded_data);
+                    Ok(())
+                })?;
+                data.try_into().map_err(|_| SnapshotError::SnapshotKey(vid, rid))?
+            }
+        };
+
+        write_to_any(&data, target, &key, &[]).map_err(|e| e.into())
     }
 }
 

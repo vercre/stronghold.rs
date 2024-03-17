@@ -194,6 +194,32 @@ pub fn write_to(plain: &[u8], path: &Path, key: &Key, associated_data: &[u8]) ->
     Ok(())
 }
 
+/// Atomically encrypt, add magic and version bytes as file-header, and [`write`][self::write] the specified
+/// plaintext to the specified path.
+///
+/// This is achieved by creating a temporary file in the same directory as the specified path (same
+/// filename with a salted suffix). This is currently known to be problematic if the path is a
+/// symlink and/or if the target path resides in a directory without user write permission.
+pub fn write_to_any(
+    plain: &[u8],
+    target: &mut impl Write,
+    key: &Key,
+    associated_data: &[u8],
+) -> Result<(), WriteError> {
+    // TODO: if path exists and is a symlink, resolve it and then append the salt
+    // TODO: if the sibling tempfile isn't writeable (e.g. directory permissions), write to
+
+    let compressed_plain = compress(plain);
+
+    // write magic and version bytes
+    target.write_all(&MAGIC)?;
+    target.write_all(&VERSION)?;
+    write(&compressed_plain, target, key, associated_data)?;
+    target.flush()?;
+
+    Ok(())
+}
+
 /// Check the file header, [`read`][self::read], and decompress the ciphertext from the specified path.
 pub fn read_from(path: &Path, key: &Key, associated_data: &[u8]) -> Result<Vec<u8>, ReadError> {
     let mut f: File = OpenOptions::new().read(true).open(path)?;
@@ -202,6 +228,30 @@ pub fn read_from(path: &Path, key: &Key, associated_data: &[u8]) -> Result<Vec<u
     check_header(&mut f)?;
     let pt = read(&mut f, key, associated_data)?;
 
+    decompress(&pt).map_err(|e| ReadError::CorruptedContent(format!("Decompression failed: {}", e)))
+}
+
+/// Check the file header, [`read`][self::read], and decompress the ciphertext from the specified path.
+pub fn read_from_any(source: &mut impl Read, key: &Key, associated_data: &[u8]) -> Result<Vec<u8>, ReadError> {
+    // check the magic bytes
+    let mut magic = [0u8; 5];
+    source.read_exact(&mut magic)?;
+    if magic != MAGIC {
+        return Err(ReadError::InvalidFile);
+    }
+
+    // check the version
+    let mut version = [0u8; 2];
+    source.read_exact(&mut version)?;
+    if version != VERSION {
+        return Err(ReadError::UnsupportedVersion {
+            expected: VERSION,
+            found: version,
+        });
+    }
+
+    // check the header for structure.
+    let pt = read(source, key, associated_data)?;
     decompress(&pt).map_err(|e| ReadError::CorruptedContent(format!("Decompression failed: {}", e)))
 }
 

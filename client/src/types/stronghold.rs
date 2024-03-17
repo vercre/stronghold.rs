@@ -10,6 +10,7 @@ use crypto::keys::x25519;
 use engine::vault::ClientId;
 use std::{
     collections::{hash_map::Entry, HashMap},
+    io::{Read, Write},
     ops::Deref,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
@@ -378,6 +379,57 @@ impl Stronghold {
         for (_, client) in clients.drain() {
             client.clear()?;
         }
+        Ok(())
+    }
+
+    /// Load the state of a [`Snapshot`] from the `source` provided. The [`Snapshot`]
+    /// is secured in memory.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iota_stronghold::{KeyProvider, Location, Stronghold};
+    /// use std::fs::{File, OpenOptions};
+    ///
+    /// let keyprovider = KeyProvider::try_from(b"asecurepassword")?;
+    /// let mut f: File = OpenOptions::new().read(true).open("stronghold.bin")?;
+    ///
+    /// let stronghold = Stronghold::default();
+    /// stronghold.use_snapshot(&keyprovider, &mut f)?;
+    /// ```
+    pub fn use_snapshot(&self, source: &mut impl Read, keyprovider: &KeyProvider) -> Result<(), ClientError> {
+        let key_buf = keyprovider
+            .try_unlock()
+            .map_err(|e| ClientError::Inner(format!("{:?}", e)))?;
+        let key = key_buf.borrow().deref().try_into().unwrap();
+
+        let mut snapshot = self.snapshot.write()?;
+        *snapshot = Snapshot::read_from(source, key, None).map_err(|e| ClientError::Inner(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Writes all client states into the [`Snapshot`] file
+    ///
+    /// # Example
+    pub fn save_snapshot(&self, target: &mut impl Write, keyprovider: &KeyProvider) -> Result<(), ClientError> {
+        let mut snapshot = self.snapshot.write()?;
+
+        let clients = self.clients.read()?;
+        let ids: Vec<ClientId> = clients.iter().map(|(id, _)| *id).collect();
+        for client_id in ids {
+            write_with_clientid!(client_id, snapshot, clients);
+        }
+
+        let key_buf = keyprovider
+            .try_unlock()
+            .map_err(|e| ClientError::Inner(format!("{:?}", e)))?;
+        let key = key_buf.borrow().deref().try_into().unwrap();
+
+        snapshot
+            .write_to(target, UseKey::Key(key))
+            .map_err(|e| ClientError::Inner(e.to_string()))?;
+
         Ok(())
     }
 }
