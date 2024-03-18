@@ -391,11 +391,11 @@ impl Stronghold {
     /// use iota_stronghold::{KeyProvider, Location, Stronghold};
     /// use std::fs::{File, OpenOptions};
     ///
-    /// let keyprovider = KeyProvider::try_from(b"asecurepassword")?;
+    /// let key_provider = KeyProvider::try_from(b"asecurepassword")?;
     /// let mut f: File = OpenOptions::new().read(true).open("stronghold.bin")?;
     ///
     /// let stronghold = Stronghold::default();
-    /// stronghold.use_snapshot(&keyprovider, &mut f)?;
+    /// stronghold.use_snapshot(&key_provider, &mut f)?;
     /// ```
     pub fn use_snapshot(&self, source: &mut impl Read, keyprovider: &KeyProvider) -> Result<(), ClientError> {
         let key_buf = keyprovider
@@ -409,9 +409,31 @@ impl Stronghold {
         Ok(())
     }
 
-    /// Writes all client states into the [`Snapshot`] file
+    /// Writes all client states into the [`Snapshot`] [`Write`] target.
     ///
     /// # Example
+    ///
+    /// ```rust
+    /// use iota_stronghold::{KeyProvider, Location, Stronghold};
+    /// use std::fs::{File, OpenOptions};
+    ///
+    /// let key_provider = KeyProvider::try_from(b"asecurepassword")?;
+    /// let key_location = Location::generic(b"signing_key_vault", b"signing_key");
+    ///
+    /// let stronghold = Stronghold::default();
+    /// let client = stronghold.create_client(b"signing_client")?;
+    ///
+    /// // generate a signing key
+    /// let proc = StrongholdProcedure::GenerateKey(GenerateKey {
+    ///     ty: KeyType::Ed25519,
+    ///     output: key_location.clone(),
+    /// });
+    /// let _ = client.execute_procedure(proc)?;
+
+    /// // persist snapshot with client and signing key
+    /// let mut f: File = OpenOptions::new().read(true).open("stronghold.bin")?;
+    /// stronghold.save_snapshot(f, &key_provider)?;
+    /// ```
     pub fn save_snapshot(&self, target: &mut impl Write, keyprovider: &KeyProvider) -> Result<(), ClientError> {
         let mut snapshot = self.snapshot.write()?;
 
